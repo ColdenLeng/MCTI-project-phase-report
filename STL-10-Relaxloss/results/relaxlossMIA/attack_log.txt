@@ -1,0 +1,4 @@
+Detected feature dim: 14
+Loss Attack AUC (negated): 0.6678
+Confidence Attack AUC: 0.5627
+Softmax Max Attack AUC: 0.5627

@@ -1,0 +1,6 @@
+relaxloss:
+  alpha: 1.0
+  upper: 0.9
+  epochs: 150
+  lr: 0.01
+  weight_decay: 0.0005

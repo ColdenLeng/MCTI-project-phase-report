@@ -1,0 +1,390 @@
+import os
+import sys
+import torch
+import numpy as np
+import urllib.request
+import tarfile
+import pandas as pd
+from torch.utils.data import TensorDataset
+
+FILE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_ROOT = os.path.join(FILE_DIR, '../../data')
+sys.path.append(os.path.join(FILE_DIR, '../'))
+from utils import mkdir
+
+
+def create_tensor_dataset(features, labels):
+    """Create TensorDataset"""
+    tensor_x = torch.stack([torch.FloatTensor(i) for i in features])  # transform to torch tensors
+    tensor_y = torch.stack([torch.LongTensor([i]) for i in labels])[:, 0]
+    dataset = torch.utils.data.TensorDataset(tensor_x, tensor_y)
+    return dataset
+
+
+def prepare_texas(seed=1000, if_avg_split=True):
+    '''
+    Texas dataset:
+    X: (67330,6169) binary feature
+    Y: (67330,)  num_classes=100
+    '''
+
+    ## Dataset directory
+    DATASET_PATH = os.path.join(DATA_ROOT, 'Texas')
+    mkdir(DATASET_PATH)
+    DATASET_FEATURES = os.path.join(DATASET_PATH, 'texas', '100/feats')
+    DATASET_LABELS = os.path.join(DATASET_PATH, 'texas', '100/labels')
+    DATASET_NUMPY = 'data.npz'
+
+    if not os.path.isfile(DATASET_FEATURES):
+        print('Dowloading the dataset...')
+        urllib.request.urlretrieve("https://www.comp.nus.edu.sg/~reza/files/dataset_texas.tgz",
+                                   os.path.join(DATASET_PATH, 'tmp.tgz'))
+        print('Dataset Dowloaded')
+        tar = tarfile.open(os.path.join(DATASET_PATH, 'tmp.tgz'))
+        tar.extractall(path=DATASET_PATH)
+
+    if not os.path.isfile(os.path.join(DATASET_PATH, DATASET_NUMPY)):
+        print('Creating data.npz file from raw data')
+        data_set_features = np.genfromtxt(DATASET_FEATURES, delimiter=',')
+        data_set_label = np.genfromtxt(DATASET_LABELS, delimiter=',')
+        X = data_set_features.astype(np.float64)
+        Y = data_set_label.astype(np.int32) - 1
+        np.savez(os.path.join(DATASET_PATH, DATASET_NUMPY), X=X, Y=Y)
+
+    ## Load data
+    data = np.load(os.path.join(DATASET_PATH, DATASET_NUMPY))
+    X = data['X']
+    Y = data['Y']
+    r = np.load(os.path.join(DATA_ROOT, 'dataset_shuffle/random_r_texas100.npy'))
+    X = X[r]
+    Y = Y[r]
+    len_train = len(X)
+
+    ## Split data
+    if if_avg_split:  # split evenly
+        train_classifier_ratio, train_attack_ratio = 0.4, 0.2
+    else:  # using fixed number of samples to train target model
+        train_classifier_ratio, train_attack_ratio = float(10000) / float(X.shape[0]), 0.3
+    train_data = X[:int(train_classifier_ratio * len_train)]
+    test_data = X[int((train_classifier_ratio + train_attack_ratio) * len_train):]
+    train_attack_data = X[int(train_classifier_ratio * len_train):int(
+        (train_classifier_ratio + train_attack_ratio) * len_train)]
+
+    train_label = Y[:int(train_classifier_ratio * len_train)]
+    test_label = Y[int((train_classifier_ratio + train_attack_ratio) * len_train):]
+    train_attack_label = Y[int(train_classifier_ratio * len_train):int(
+        (train_classifier_ratio + train_attack_ratio) * len_train)]
+
+    ## Generate shadow and target partition
+    np.random.seed(seed)
+    train_len = train_data.shape[0]
+    r = np.arange(train_len)
+    np.random.shuffle(r)
+    shadow_indices = r[:train_len // 2]
+    target_indices = np.delete(np.arange(train_len), shadow_indices)
+    shadow_train_data, shadow_train_label = train_data[shadow_indices], train_label[shadow_indices]
+    target_train_data, target_train_label = train_data[target_indices], train_label[target_indices]
+
+    test_len = 1 * train_len
+    r = np.arange(test_len)
+    np.random.shuffle(r)
+    shadow_indices = r[:test_len // 2]
+    target_indices = np.delete(np.arange(test_len), shadow_indices)
+    shadow_test_data, shadow_test_label = test_data[shadow_indices], test_label[shadow_indices]
+    target_test_data, target_test_label = test_data[target_indices], test_label[target_indices]
+
+    ## Generate dataloader
+    shadow_train = create_tensor_dataset(shadow_train_data, shadow_train_label)
+    shadow_test = create_tensor_dataset(shadow_test_data, shadow_test_label)
+
+    target_train = create_tensor_dataset(target_train_data, target_train_label)
+    target_test = create_tensor_dataset(target_test_data, target_test_label)
+
+    pseudoattack_data = create_tensor_dataset(train_attack_data, train_attack_label)
+    return target_train, target_test, shadow_train, shadow_test, pseudoattack_data
+
+
+def prepare_purchase(seed=1000, if_avg_split=True):
+    '''
+    purchase
+    X: (197324, 600) binary feature
+    Y: (197324,)  100 classes
+    '''
+    DATASET_PATH = os.path.join(DATA_ROOT, 'Purchase')
+    mkdir(DATASET_PATH)
+    DATASET_NAME = 'dataset_purchase'
+    DATASET_NUMPY = 'data.npz'
+    DATASET_FILE = os.path.join(DATASET_PATH, DATASET_NAME)
+
+    if not os.path.isfile(DATASET_FILE):
+        print('Dowloading the dataset...')
+        urllib.request.urlretrieve("https://www.comp.nus.edu.sg/~reza/files/dataset_purchase.tgz",
+                                   os.path.join(DATASET_PATH, 'tmp.tgz'))
+        print('Dataset Dowloaded')
+        tar = tarfile.open(os.path.join(DATASET_PATH, 'tmp.tgz'))
+        tar.extractall(path=DATASET_PATH)
+
+    if not os.path.isfile(os.path.join(DATASET_PATH, DATASET_NUMPY)):
+        print('Creating data.npz file from raw data')
+        data_set = np.genfromtxt(DATASET_FILE, delimiter=',')
+        X = data_set[:, 1:].astype(np.float64)
+        Y = (data_set[:, 0]).astype(np.int32) - 1
+        np.savez(os.path.join(DATASET_PATH, DATASET_NUMPY), X=X, Y=Y)
+
+    ## Load data
+    data = np.load(os.path.join(DATASET_PATH, DATASET_NUMPY))
+    X = data['X']
+    Y = data['Y']
+    r = np.load(os.path.join(DATA_ROOT, 'dataset_shuffle/random_r_purchase100.npy'))
+    X = X[r]
+    Y = Y[r]
+    len_train = len(X)
+
+    ## Split data
+    if if_avg_split:
+        '''
+        target size: 39465(train), 39465(test)
+        shadow size: 39464(train), 39464(test)
+        pseudoattack size: 39465
+        '''
+        train_classifier_ratio, train_attack_ratio = 0.4, 0.2
+    else:
+        '''
+        target size: 9866(train), 9866(test)
+        shadow size: 9866(train), 9866(test)
+        '''
+        train_classifier_ratio, train_attack_ratio = 0.1, 0.3
+    train_data = X[:int(train_classifier_ratio * len_train)]
+    test_data = X[int((train_classifier_ratio + train_attack_ratio) * len_train):]
+    train_attack_data = X[int(train_classifier_ratio * len_train):int(
+        (train_classifier_ratio + train_attack_ratio) * len_train)]
+
+    train_label = Y[:int(train_classifier_ratio * len_train)]
+    test_label = Y[int((train_classifier_ratio + train_attack_ratio) * len_train):]
+    train_attack_label = Y[int(train_classifier_ratio * len_train):int(
+        (train_classifier_ratio + train_attack_ratio) * len_train)]
+
+    ## Generate shadow and target partition
+    np.random.seed(seed)
+    train_len = train_data.shape[0]
+    r = np.arange(train_len)
+    np.random.shuffle(r)
+    shadow_indices = r[:train_len // 2]
+    target_indices = r[train_len // 2:]
+    shadow_train_data, shadow_train_label = train_data[shadow_indices], train_label[shadow_indices]
+    target_train_data, target_train_label = train_data[target_indices], train_label[target_indices]
+
+    test_len = 1 * train_len
+    r = np.arange(test_len)
+    np.random.shuffle(r)
+    shadow_indices = r[:test_len // 2]
+    target_indices = r[test_len // 2:]
+    shadow_test_data, shadow_test_label = test_data[shadow_indices], test_label[shadow_indices]
+    target_test_data, target_test_label = test_data[target_indices], test_label[target_indices]
+
+    shadow_train = create_tensor_dataset(shadow_train_data, shadow_train_label)
+    shadow_test = create_tensor_dataset(shadow_test_data, shadow_test_label)
+    target_train = create_tensor_dataset(target_train_data, target_train_label)
+    target_test = create_tensor_dataset(target_test_data, target_test_label)
+    pseudoattack_data = create_tensor_dataset(train_attack_data, train_attack_label)
+    return target_train, target_test, shadow_train, shadow_test, pseudoattack_data
+    
+#-----------------------------------------------------------------
+'''
+
+def prepare_covertype(seed=1000, if_avg_split=True):
+    
+    
+  
+
+    DATASET_PATH = os.path.join(DATA_ROOT, 'Covertype')
+    mkdir(DATASET_PATH)
+    DATASET_NUMPY = 'covertype.npz'
+
+    data = np.load(os.path.join(DATASET_PATH, DATASET_NUMPY))
+    X = data['X']
+    Y = data['Y']
+
+    # Shuffle
+    np.random.seed(seed)
+    indices = np.arange(len(X))
+    np.random.shuffle(indices)
+    X = X[indices]
+    Y = Y[indices]
+
+    N = len(X)
+
+    if if_avg_split:
+        # target: 39465(train) + 39465(test)
+        # shadow: 39464(train) + 39464(test)
+        # pseudo: 58102
+        train_classifier_ratio, train_attack_ratio = 0.4, 0.2
+    else:
+        # smaller setup for quick testing
+        train_classifier_ratio, train_attack_ratio = 0.1, 0.3
+
+    num_tc = int(N * train_classifier_ratio)
+    num_ta = int(N * train_attack_ratio)
+
+    train_data = X[:num_tc]
+    train_label = Y[:num_tc]
+
+    attack_data = X[num_tc:num_tc + num_ta]
+    attack_label = Y[num_tc:num_tc + num_ta]
+
+    test_data = X[num_tc + num_ta:]
+    test_label = Y[num_tc + num_ta:]
+
+    # split train into shadow/target
+    half = num_tc // 2
+    shadow_train_data = train_data[:half]
+    shadow_train_label = train_label[:half]
+    target_train_data = train_data[half:]
+    target_train_label = train_label[half:]
+
+    # split test into shadow/target
+    half = len(test_data) // 2
+    shadow_test_data = test_data[:half]
+    shadow_test_label = test_label[:half]
+    target_test_data = test_data[half:]
+    target_test_label = test_label[half:]
+
+    # convert to tensor dataset
+    shadow_train = create_tensor_dataset(shadow_train_data, shadow_train_label)
+    shadow_test = create_tensor_dataset(shadow_test_data, shadow_test_label)
+    target_train = create_tensor_dataset(target_train_data, target_train_label)
+    target_test = create_tensor_dataset(target_test_data, target_test_label)
+    pseudo_attack = create_tensor_dataset(attack_data, attack_label)
+
+    return target_train, target_test, shadow_train, shadow_test, pseudo_attack
+
+'''
+def prepare_covertype(seed=1000, if_avg_split=True, random_split=True):
+    '''
+    Covertype dataset:
+    X: (581012, 54)
+    Y: (581012,)  num_classes=7 (originally 1–7, subtract 1 to make it 0-based)
+
+    Returns:
+        target_train, target_test, shadow_train, shadow_test, pseudoattack_data
+    '''
+  
+
+    DATASET_PATH = os.path.join(DATA_ROOT, 'Covertype')
+    mkdir(DATASET_PATH)
+    DATASET_NUMPY = 'covertype.npz'
+
+    data = np.load(os.path.join(DATASET_PATH, DATASET_NUMPY))
+    X = data['X']
+    Y = data['Y']
+
+    np.random.seed(seed)
+    r = np.arange(len(X))
+    np.random.shuffle(r)
+    X = X[r]
+    Y = Y[r]
+
+    total_len = len(X)
+    if if_avg_split:
+        train_classifier_ratio, train_attack_ratio = 0.4, 0.2
+    else:
+        train_classifier_ratio, train_attack_ratio = 0.1, 0.3
+
+    len_train = int(train_classifier_ratio * total_len)
+    len_attack = int(train_attack_ratio * total_len)
+
+    train_data = X[:len_train]
+    train_label = Y[:len_train]
+    attack_data = X[len_train:len_train + len_attack]
+    attack_label = Y[len_train:len_train + len_attack]
+    test_data = X[len_train + len_attack:]
+    test_label = Y[len_train + len_attack:]
+
+    # ----------------------
+    # Split train/test into shadow/target (randomly)
+    # ----------------------
+    def split_half_random(data, label, seed):
+        np.random.seed(seed)
+        r = np.arange(len(data))
+        np.random.shuffle(r)
+        half = len(data) // 2
+        return (
+            data[r[:half]], label[r[:half]],  # shadow
+            data[r[half:]], label[r[half:]]   # target
+        )
+
+    shadow_train_data, shadow_train_label, target_train_data, target_train_label = split_half_random(train_data, train_label, seed + 1)
+    shadow_test_data, shadow_test_label, target_test_data, target_test_label = split_half_random(test_data, test_label, seed + 2)
+
+    # ----------------------
+    # Convert to tensor datasets
+    # ----------------------
+    shadow_train = create_tensor_dataset(shadow_train_data, shadow_train_label)
+    shadow_test = create_tensor_dataset(shadow_test_data, shadow_test_label)
+    target_train = create_tensor_dataset(target_train_data, target_train_label)
+    target_test = create_tensor_dataset(target_test_data, target_test_label)
+    pseudoattack_data = create_tensor_dataset(attack_data, attack_label)
+
+    return target_train, target_test, shadow_train, shadow_test, pseudoattack_data
+
+FILE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_ROOT = os.path.join(FILE_DIR, '../../data')
+
+
+def create_tensor_dataset(features, labels):
+    tensor_x = torch.tensor(features, dtype=torch.float32)
+    tensor_y = torch.tensor(labels, dtype=torch.long)
+    return TensorDataset(tensor_x, tensor_y)
+
+
+def prepare_adult(seed=1000, if_avg_split=True):
+    dataset_path = os.path.join(DATA_ROOT, 'Adult', 'adult.npz')
+    data = np.load(dataset_path)
+    X = data['x']
+    Y = data['y']
+    members = data['members']
+
+    # Shuffle data
+    np.random.seed(seed)
+    indices = np.arange(len(X))
+    np.random.shuffle(indices)
+    X = X[indices]
+    Y = Y[indices]
+    members = members[indices]
+
+    # Split dataset by member indicator
+    X_member = X[members == 1]
+    Y_member = Y[members == 1]
+    X_nonmember = X[members == 0]
+    Y_nonmember = Y[members == 0]
+
+    n_total_member = len(X_member)
+    n_total_nonmember = len(X_nonmember)
+
+    n_target_train = int(0.25 * n_total_member)
+    n_shadow_train = int(0.50 * n_total_member)
+    n_target_test = int(0.25 * n_total_nonmember)
+    n_shadow_test = int(0.50 * n_total_nonmember)
+
+    # 分配target/shadow train
+    target_train_data = X_member[:n_target_train]
+    target_train_label = Y_member[:n_target_train]
+    shadow_train_data = X_member[n_target_train:n_target_train + n_shadow_train]
+    shadow_train_label = Y_member[n_target_train:n_target_train + n_shadow_train]
+
+    # 分配target/shadow test
+    target_test_data = X_nonmember[:n_target_test]
+    target_test_label = Y_nonmember[:n_target_test]
+    shadow_test_data = X_nonmember[n_target_test:n_target_test + n_shadow_test]
+    shadow_test_label = Y_nonmember[n_target_test:n_target_test + n_shadow_test]
+
+    # pseudoattack_data 用全部成员
+    pseudoattack_data = create_tensor_dataset(X_member, Y_member)
+
+    # 打包成TensorDataset
+    target_train = create_tensor_dataset(target_train_data, target_train_label)
+    target_test = create_tensor_dataset(target_test_data, target_test_label)
+    shadow_train = create_tensor_dataset(shadow_train_data, shadow_train_label)
+    shadow_test = create_tensor_dataset(shadow_test_data, shadow_test_label)
+
+    return target_train, target_test, shadow_train, shadow_test, pseudoattack_data
