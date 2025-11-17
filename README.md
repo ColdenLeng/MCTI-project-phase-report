@@ -6,7 +6,7 @@ method to different datasets (e.g., Adult, STL-10, MIMIC-IV) and membership
 inference attacks.
 
 ⚠️ Note: The code structure is messy and mainly for **personal experiments**,
-not for production use.
+not for production use. For more information, please read the final report
 
 MIMIC-IV-PROCESSOR include some example scripts on how to process MIMIC data
 Relaxloss includes both binary and multi-classification, and MIMIC data processor scripts.
