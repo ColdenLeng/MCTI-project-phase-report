@@ -1,4 +1,4 @@
-# RelaxLoss - Personal Experiments
+# RelaxLoss - Experiments
 
 This repository is based on the original **RelaxLoss** implementation and paper.
 I use it as a **research playground** to reproduce the results and extend the
